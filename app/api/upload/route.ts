@@ -7,9 +7,11 @@ import {
 } from "@/lib/ollama";
 import {
   saveChunks,
-  Chunk
+  Chunk,
+  extractEntities
 } from "@/lib/vectorStore";
 import llamaParseJson from "@/llamaParseJson.json";
+import { buildRAGChunksFromItems } from "@/lib/build-chunks-from-items";
 
 type ParsedPage = { page_number: number; text: string };
 type ParsedDocument = { text: { pages: ParsedPage[] } };
@@ -86,88 +88,115 @@ function stripMarkup(text: string): string {
     .trim();
 }
 
+function splitPageBySections(pageText: string): string[] {
+  // Make the newline optional: use /(?:^|\n) instead of /\n
+  const sectionPattern = /(?:^|\n)(\d+\.\s+[A-Z\s]+\(?[A-Z]*\)?)/g;
+  const matches = [...pageText.matchAll(sectionPattern)];
+
+  console.log(`🔍 Found ${matches.length} section headers`);
+  matches.forEach(m => console.log(`   Match: "${m[1]}"`));
+
+  if (matches.length === 0) {
+    return [pageText];
+  }
+
+  const sections = [];
+
+  for (let i = 0; i < matches.length; i++) {
+    const start = matches[i].index;
+    const end = i < matches.length - 1 ? matches[i + 1].index : pageText.length;
+    const sectionText = pageText.substring(start, end).trim();
+
+    if (sectionText) {
+      sections.push(sectionText);
+    }
+  }
+
+  return sections;
+}
+
+function extractSectionTitle(section: string): string {
+  const match = section.match(/^\d+\.\s+([A-Z\s]+\(?[A-Z]*\)?)/);
+  return match ? match[1].trim() : "";
+}
+
 function buildRAGChunks(pages: ParsedPage[]): RAGChunk[] {
   const chunks: RAGChunk[] = [];
   let chunkCounter = 0;
 
   for (const page of pages) {
     if (page.page_number < 4 || page.page_number === 7 || page.page_number === 8) continue;
+
+    // ⭐ DEBUG: Check raw content before stripMarkup
+    if (page.page_number === 159) {
+      console.log('🔍 RAW CONTENT (before stripMarkup):');
+      console.log(page.text.slice(0, 500));
+      console.log('---');
+    }
+
     const content = stripMarkup(page.text.trim());
+
+    // ⭐ DEBUG: Check content after stripMarkup
+    if (page.page_number === 159) {
+      console.log('🔍 AFTER stripMarkup:');
+      console.log(content.slice(0, 500));
+      console.log('---');
+    }
+
     if (!content) continue;
 
-    // Agar page chota hai (jaisa biography text normally hota hai), 
-    // pura page hi ek chunk bana do
-    const words = content.split(/\s+/).filter(Boolean);
+    const sections = splitPageBySections(content);
 
-    if (words.length <= 300) {
-      // Pura page = ek chunk, page number 100% accurate rahega
+    if (page.page_number === 159) {
+      console.log(`📊 After split: ${sections.length} sections`);
+    }
+
+    for (const section of sections) {
       chunks.push({
         id: `chunk_${chunkCounter++}`,
         page: page.page_number,
-        text: content,
-        embedText: content,
-        heading: "", // ya heading-detect logic alag se
+        text: section,
+        embedText: section,
+        heading: extractSectionTitle(section),
       });
-    } else {
-      // Bada page hai to andar hi split karo, lekin page number same rahega
-      for (let start = 0; start < words.length; start += 200) {
-        const chunkWords = words.slice(start, start + 250);
-        chunks.push({
-          id: `chunk_${chunkCounter++}`,
-          page: page.page_number, // YE NEVER GALAT HOGA — single page se hi aaya
-          text: chunkWords.join(" "),
-          embedText: chunkWords.join(" "),
-          heading: "",
-        });
-      }
     }
   }
 
   return chunks;
 }
 
+
+
 export async function POST(req: NextRequest) {
   try {
+    const formData = await req.formData();
+    const file = formData.get('json') as File;
+    const scholarName = (formData.get('scholarName') as string) || 'Unknown Scholar';
 
-    const contentType = req.headers.get("content-type") || "";
-    let parsed: ParsedDocument;
-    let scholarName = "Unknown Scholar";
+    if (!file) {
+      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
+    }
 
-    if (contentType.includes("application/json")) {
-      const body = await req.json();
-      parsed = body as ParsedDocument;
-      scholarName = (body.scholarName as string) || scholarName;
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+
+    const pages = parsed.items.pages;
+    if (!pages || !Array.isArray(pages)) {
+      return NextResponse.json({ error: 'Invalid format: no pages array' }, { status: 400 });
+    }
+
+    // ⭐ Check if this is items-based or old format
+    const firstPage = pages[0];
+    const isItemsBased = firstPage && Array.isArray(firstPage.items);
+
+    let textChunks: any[];
+    if (isItemsBased) {
+      console.log('📄 Using items-based chunking (NEW)');
+      textChunks = buildRAGChunksFromItems(pages);
     } else {
-      // Accept a JSON file under "json" via multipart form data
-      const formData = await req.formData();
-      const file = formData.get("json") as File;
-      scholarName = (formData.get("scholarName") as string) || scholarName;
-      if (!file) {
-        return NextResponse.json({
-          error: "No parsed-document JSON provided"
-        }, {
-          status: 400
-        });
-      }
-      const text = await file.text();
-      parsed = JSON.parse(text) as ParsedDocument;
+      console.log('📄 Using legacy page-based chunking (OLD)');
+      textChunks = buildRAGChunks(pages);
     }
-
-    const pages = parsed?.pages;
-    if (!Array.isArray(pages) || pages.length === 0) {
-      return NextResponse.json({
-        error: "Parsed document has no pages"
-      }, {
-        status: 400
-      });
-    }
-
-    const textChunks =
-      buildRAGChunks(
-        parsed.pages,
-        250,
-        50
-      );
 
     const numpages = pages[pages.length - 1].page_number;
 
@@ -201,7 +230,13 @@ export async function POST(req: NextRequest) {
             embedding,
             page: chunk.page,
             scholarName,
-            embedText: chunk.embedText
+            embedText: chunk.embedText,
+            // ⭐ NEW: Store metadata for better retrieval
+            metadata: chunk.metadata || {
+              sectionTitle: chunk.heading || 'Untitled',
+              wordCount: chunk.text.split(/\s+/).length,
+              entities: extractEntities(chunk.text)
+            }
           });
         }
         saveChunks(chunks, scholarName);

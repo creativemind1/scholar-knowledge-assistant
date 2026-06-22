@@ -14,6 +14,14 @@ export interface Chunk {
   scholarName: string;
   heading: string;
   embedText: string;
+  metadata?: {
+    sectionTitle?: string;
+    wordCount?: number;
+    entities?: string[];
+    containsHardoi?: boolean;
+    containsSpring?: boolean;
+    [key: string]: any; // For future flexibility
+  };
 }
 
 export interface DB {
@@ -236,4 +244,11 @@ export function expandWithNeighbors(
   // continuous narrative, not in relevance-score order.
   const sortedIndices = Array.from(expandedIndices).sort((a, b) => a - b);
   return sortedIndices.map((idx) => db.chunks[idx]);
+}
+
+
+export function extractEntities(text: string): string[] {
+  // Look for capitalized words that might be names or places
+  const entities = text.match(/[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*/g) || [];
+  return [...new Set(entities)].slice(0, 10);
 }
