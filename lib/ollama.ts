@@ -1,3 +1,5 @@
+import { normalizeText } from "./vectorStore";
+
 const OLLAMA_BASE = process.env.OLLAMA_URL || "http://localhost:11434";
 
 export async function getEmbedding(
@@ -6,22 +8,34 @@ export async function getEmbedding(
 ): Promise<number[]> {
   const prefix = type === "query" ? "search_query: " : "search_document: ";
 
-  const res = await fetch(`${OLLAMA_BASE}/api/embeddings`, {
+  const response = await fetch(`${OLLAMA_BASE}/api/embed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: process.env.EMBED_MODEL || "nomic-embed-text",
-      prompt: prefix + text,
+      input: normalizeText(text),
     }),
   });
+  // process.env.EMBED_MODEL || "nomic-embed-text",
+  // const response = await fetch(
+  //   "https://router.huggingface.co/hf-inference/models/BAAI/bge-large-en-v1.5/pipeline/feature-extraction",
+  //   {
+  //     headers: {
+  //       Authorization: `Bearer ${process.env.HF_TOKEN}`,
+  //       "Content-Type": "application/json",
+  //     },
+  //     method: "POST",
+  //     body: JSON.stringify({ inputs: text }),
+  //   }
+  // );
 
-  if (!res.ok) {
-    const err = await res.text();
+  if (!response.ok) {
+    const err = await response.text();
     throw new Error(`Ollama embeddings error: ${err}`);
   }
 
-  const data = await res.json();
-  return data.embedding;
+  const data = await response.json();
+  return data.embeddings[0];
 }
 
 export async function generateAnswer(
@@ -50,6 +64,8 @@ export async function generateAnswer(
   const decoder = new TextDecoder();
 
   if (!reader) throw new Error("No response body");
+
+
 
   let buffer = "";
   while (true) {
@@ -111,33 +127,6 @@ export async function generateAnswer(
       onChunk(remainder);
     }
   }
-}
-
-export async function buildRAGPrompt(
-  question: string,
-  contextChunks: { text: string; page: number }[],
-): Promise<string> {
-  const context = contextChunks
-    .map((c) => `(Page ${c.page}):\n${c.text}`)
-    .join("\n\n---\n\n");
-
-  return `You are a biography assistant. Answer using ONLY the text below.
-
-RULES:
-1. Use ONLY the provided text. Do NOT use outside knowledge.
-2. If answer is NOT in text, say: "The biography does not contain information about this."
-3. Do NOT hallucinate or invent facts.
-4. Extract exact information from text (names, places, dates).
-5. Include page numbers: (page X).
-
-TEXT:
-
-${context}
-
-QUESTION:
-${question}
-
-ANSWER:`;
 }
 
 // NOTE: This function is currently unused — your ask route imports

@@ -60,21 +60,21 @@ export default function Home() {
   }, [messages]);
 
   const handleFileUpload = async (file: File) => {
-    if (!file.name.endsWith(".pdf")) {
-      setUploadState((s) => ({ ...s, error: "Please upload a PDF file." }));
+    if (!file.name.endsWith(".json")) {
+      setUploadState((s) => ({ ...s, error: "Please upload a JSON file." }));
       return;
     }
 
-    const name = scholarName.trim() || file.name.replace(".pdf", "");
+    const name = scholarName.trim() || file.name.replace(".json", "");
     const formData = new FormData();
-    formData.append("pdf", file);
+    formData.append("json", file);
     formData.append("scholarName", name);
 
     setUploadState({
       uploading: true,
       progress: 0,
       total: 0,
-      message: "Reading PDF...",
+      message: "Reading json...",
       error: "",
       done: false,
     });
@@ -128,7 +128,7 @@ export default function Home() {
                 error: event.message,
               }));
             }
-          } catch {}
+          } catch { }
         }
       }
 
@@ -144,7 +144,7 @@ export default function Home() {
             }));
             await checkStatus();
           }
-        } catch {}
+        } catch { }
       }
     } catch {
       setUploadState((s) => ({
@@ -239,10 +239,10 @@ export default function Home() {
                 prev.map((m) =>
                   m.id === assistantMsg.id
                     ? {
-                        ...m,
-                        content: event.text,
-                        isStreaming: false,
-                      }
+                      ...m,
+                      content: event.text,
+                      isStreaming: false,
+                    }
                     : m,
                 ),
               );
@@ -257,15 +257,15 @@ export default function Home() {
                 prev.map((m) =>
                   m.id === assistantMsg.id
                     ? {
-                        ...m,
-                        content: `Error: ${event.message}`,
-                        isStreaming: false,
-                      }
+                      ...m,
+                      content: `Error: ${event.message}`,
+                      isStreaming: false,
+                    }
                     : m,
                 ),
               );
             }
-          } catch {}
+          } catch { }
         }
       }
 
@@ -283,25 +283,25 @@ export default function Home() {
               prev.map((m) =>
                 m.id === assistantMsg.id
                   ? {
-                      ...m,
-                      content: `Error: ${event.message}`,
-                      isStreaming: false,
-                    }
+                    ...m,
+                    content: `Error: ${event.message}`,
+                    isStreaming: false,
+                  }
                   : m,
               ),
             );
           }
-        } catch {}
+        } catch { }
       }
     } catch {
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantMsg.id
             ? {
-                ...m,
-                content: "Failed to get answer. Check Ollama connection.",
-                isStreaming: false,
-              }
+              ...m,
+              content: "Failed to get answer. Check Ollama connection.",
+              isStreaming: false,
+            }
             : m,
         ),
       );
@@ -385,11 +385,10 @@ export default function Home() {
 
           {/* Drop zone */}
           <div
-            className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
-              dragOver
-                ? "border-[#C9A84C] bg-[#C9A84C]/10"
-                : "border-[#C9A84C]/20 hover:border-[#C9A84C]/40 hover:bg-white/[0.02]"
-            }`}
+            className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${dragOver
+              ? "border-[#C9A84C] bg-[#C9A84C]/10"
+              : "border-[#C9A84C]/20 hover:border-[#C9A84C]/40 hover:bg-white/[0.02]"
+              }`}
             onDrop={handleDrop}
             onDragOver={(e) => {
               e.preventDefault();
@@ -401,14 +400,14 @@ export default function Home() {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf"
+              accept=".json"
               className="hidden"
               onChange={(e) =>
                 e.target.files?.[0] && handleFileUpload(e.target.files[0])
               }
             />
             <div className="text-3xl mb-3">📜</div>
-            <p className="text-[#F2E8D9]/60 text-sm mb-1">Drop PDF here</p>
+            <p className="text-[#F2E8D9]/60 text-sm mb-1">Drop JSON here</p>
             <p className="text-[#F2E8D9]/30 text-xs">or click to browse</p>
           </div>
 
@@ -489,7 +488,7 @@ export default function Home() {
                       No biography loaded yet
                     </h3>
                     <p className="text-[#F2E8D9]/30 text-sm leading-relaxed">
-                      Upload a PDF in the left panel to begin. The system will
+                      Upload a JSON in the left panel to begin. The system will
                       extract, chunk, and embed the content using your local
                       Mistral model.
                     </p>
@@ -603,11 +602,10 @@ export default function Home() {
           {/* Input */}
           <div className="px-6 py-4 border-t border-[#C9A84C]/10">
             <div
-              className={`flex gap-3 items-end bg-[#F2E8D9]/5 border rounded-2xl px-4 py-3 transition-colors ${
-                status.loaded
-                  ? "border-[#C9A84C]/20 focus-within:border-[#C9A84C]/40"
-                  : "border-[#F2E8D9]/10 opacity-50"
-              }`}
+              className={`flex gap-3 items-end bg-[#F2E8D9]/5 border rounded-2xl px-4 py-3 transition-colors ${status.loaded
+                ? "border-[#C9A84C]/20 focus-within:border-[#C9A84C]/40"
+                : "border-[#F2E8D9]/10 opacity-50"
+                }`}
             >
               <textarea
                 ref={chatInputRef}
@@ -618,7 +616,7 @@ export default function Home() {
                 placeholder={
                   status.loaded
                     ? `Ask about ${status.scholarName}...`
-                    : "Upload a biography PDF to begin"
+                    : "Upload a biography JSON to begin"
                 }
                 rows={1}
                 className="flex-1 bg-transparent text-[#F2E8D9] text-sm placeholder-[#F2E8D9]/25 focus:outline-none resize-none leading-relaxed"

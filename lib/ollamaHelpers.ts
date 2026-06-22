@@ -1,7 +1,58 @@
 const OLLAMA_BASE = process.env.OLLAMA_URL || "http://localhost:11434";
 
 // Strip markdown code fences some models wrap JSON output in,
+
 // even when format: "json" is requested.
+
+
+const HF_RERANK_URL =
+  "https://router.huggingface.co/hf-inference/models/BAAI/bge-reranker-v2-m3";
+
+
+export async function rerankDocuments(query: string, chunks: any[]) {
+
+  const inputs = chunks.map(chunk => ({
+    text: query,
+    text_pair: chunk.embedText
+  }));
+
+
+  const response = await fetch(
+    HF_RERANK_URL,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.HF_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        inputs
+      })
+    }
+  );
+
+
+  const result = await response.json();
+
+
+  if (!Array.isArray(result)) {
+    throw new Error(
+      `Reranker failed: ${JSON.stringify(result)}`
+    );
+  }
+
+
+  return chunks
+    .map((chunk, index) => ({
+      ...chunk,
+      rerankScore: result[0][index]['score']
+    }))
+    .sort(
+      (a, b) =>
+        b.rerankScore - a.rerankScore
+    );
+}
+
 function stripJsonFences(text: string): string {
   return text
     .replace(/```json/gi, "")

@@ -1,190 +1,239 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getEmbedding } from "@/lib/ollama";
-import { saveChunks, Chunk } from "@/lib/vectorStore";
+import {
+  NextRequest,
+  NextResponse
+} from "next/server";
+import {
+  getEmbedding
+} from "@/lib/ollama";
+import {
+  saveChunks,
+  Chunk
+} from "@/lib/vectorStore";
+import llamaParseJson from "@/llamaParseJson.json";
 
-// Paragraph-aware chunking.
-//
-// Keep chunks SMALL (maxWords ~250). Small chunks = precise, well-separated
-// embeddings = accurate retrieval ranking. Narrative completeness (stories
-// that span multiple chunks) is handled at QUERY time by
-// expandWithNeighbors() in the ask route, not by making chunks huge.
-// Large chunks (e.g. 3000 words) dilute each embedding across many
-// unrelated topics and badly hurt retrieval precision.
-function chunkText(text: string, maxWords = 250, overlapWords = 50): string[] {
-  const paragraphs = text
-    .replace(/\r\n/g, "\n")
-    .split(/\n\s*\n+/)
-    .map((p) => p.trim())
-    .filter(Boolean);
+type ParsedPage = { page_number: number; text: string };
+type ParsedDocument = { text: { pages: ParsedPage[] } };
+interface RAGChunk {
+  id: string;
+  page: number;
+  title?: string;
+  chapter?: string;
+  section?: string;
+  subsection?: string;
+  text: string;
+  heading: string;
+  embedText: string;  // pure content only, for the embedding model
+}
+interface BoundingBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  confidence: number;
+  start_index: number;
+  end_index: number;
+  label: string;
+}
 
-  const chunks: string[] = [];
-  let bufferWords: string[] = [];
+interface HeadingItem {
+  type: "heading";
+  md: string;
+  level: number;
+  value: string;
+  bbox?: BoundingBox[];
+}
 
-  function flushBuffer() {
-    if (bufferWords.length === 0) return;
-    const chunk = bufferWords.join(" ").trim();
-    if (chunk.length > 0) chunks.push(chunk);
-    if (bufferWords.length > overlapWords) {
-      bufferWords = bufferWords.slice(bufferWords.length - overlapWords);
+interface TextItem {
+  type: "text";
+  md: string;
+  value: string;
+  bbox?: BoundingBox[];
+}
+
+interface LinkItem {
+  type: "link";
+  md: string;
+  url: string;
+  text: string;
+  bbox?: BoundingBox[];
+}
+
+type LlamaParseItem =
+  | HeadingItem
+  | TextItem
+  | LinkItem;
+
+interface LlamaParsePage {
+  page_number: number;
+  items: LlamaParseItem[];
+  page_width: number;
+  page_height: number;
+  success: boolean;
+}
+
+
+function cleanMeta(value: string) {
+  return value?.trim()
+    ? value
+    : "N/A";
+
+}
+
+function stripMarkup(text: string): string {
+  return text
+    .replace(/<[^>]+>/g, "") // remove all HTML-like tags
+    .replace(/\s+/g, " ")    // collapse extra whitespace left behind
+    .trim();
+}
+
+function buildRAGChunks(pages: ParsedPage[]): RAGChunk[] {
+  const chunks: RAGChunk[] = [];
+  let chunkCounter = 0;
+
+  for (const page of pages) {
+    if (page.page_number < 4 || page.page_number === 7 || page.page_number === 8) continue;
+    const content = stripMarkup(page.text.trim());
+    if (!content) continue;
+
+    // Agar page chota hai (jaisa biography text normally hota hai), 
+    // pura page hi ek chunk bana do
+    const words = content.split(/\s+/).filter(Boolean);
+
+    if (words.length <= 300) {
+      // Pura page = ek chunk, page number 100% accurate rahega
+      chunks.push({
+        id: `chunk_${chunkCounter++}`,
+        page: page.page_number,
+        text: content,
+        embedText: content,
+        heading: "", // ya heading-detect logic alag se
+      });
     } else {
-      bufferWords = [];
-    }
-  }
-
-  for (const p of paragraphs) {
-    const words = p.split(/\s+/).filter(Boolean);
-
-    if (words.length > maxWords) {
-      const sentences = p.split(/(?<=[.!?])\s+/);
-      for (const s of sentences) {
-        const sw = s.split(/\s+/).filter(Boolean);
-        if (bufferWords.length + sw.length > maxWords) {
-          flushBuffer();
-        }
-        bufferWords.push(...sw);
+      // Bada page hai to andar hi split karo, lekin page number same rahega
+      for (let start = 0; start < words.length; start += 200) {
+        const chunkWords = words.slice(start, start + 250);
+        chunks.push({
+          id: `chunk_${chunkCounter++}`,
+          page: page.page_number, // YE NEVER GALAT HOGA — single page se hi aaya
+          text: chunkWords.join(" "),
+          embedText: chunkWords.join(" "),
+          heading: "",
+        });
       }
-    } else {
-      if (bufferWords.length + words.length > maxWords) {
-        flushBuffer();
-      }
-      bufferWords.push(...words);
     }
   }
 
-  flushBuffer();
-
-  // Merge any short trailing fragment into the previous chunk rather than
-  // discarding it or shipping it as an orphan with no surrounding context.
-  const merged: string[] = [];
-  for (const c of chunks) {
-    if (c.length < 50 && merged.length > 0) {
-      merged[merged.length - 1] += " " + c;
-    } else {
-      merged.push(c);
-    }
-  }
-  return merged;
+  return chunks;
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const formData = await req.formData();
-    const file = formData.get("pdf") as File;
-    const scholarName =
-      (formData.get("scholarName") as string) || "Unknown Scholar";
 
-    if (!file) {
-      return NextResponse.json(
-        { error: "No PDF file provided" },
-        { status: 400 },
-      );
+    const contentType = req.headers.get("content-type") || "";
+    let parsed: ParsedDocument;
+    let scholarName = "Unknown Scholar";
+
+    if (contentType.includes("application/json")) {
+      const body = await req.json();
+      parsed = body as ParsedDocument;
+      scholarName = (body.scholarName as string) || scholarName;
+    } else {
+      // Accept a JSON file under "json" via multipart form data
+      const formData = await req.formData();
+      const file = formData.get("json") as File;
+      scholarName = (formData.get("scholarName") as string) || scholarName;
+      if (!file) {
+        return NextResponse.json({
+          error: "No parsed-document JSON provided"
+        }, {
+          status: 400
+        });
+      }
+      const text = await file.text();
+      parsed = JSON.parse(text) as ParsedDocument;
     }
 
-    if (!file.name.endsWith(".pdf")) {
-      return NextResponse.json(
-        { error: "Only PDF files are supported" },
-        { status: 400 },
-      );
+    const pages = parsed?.pages;
+    if (!Array.isArray(pages) || pages.length === 0) {
+      return NextResponse.json({
+        error: "Parsed document has no pages"
+      }, {
+        status: 400
+      });
     }
 
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pdfParseModule = (await import("pdf-parse")) as any;
-    const pdfParse = pdfParseModule.default || pdfParseModule;
-    const pdfData = await pdfParse(buffer);
-
-    const rawText = pdfData.text;
-
-    if (!rawText || rawText.trim().length < 100) {
-      return NextResponse.json(
-        {
-          error:
-            "Could not extract text from PDF. Make sure it is not a scanned image PDF.",
-        },
-        { status: 400 },
+    const textChunks =
+      buildRAGChunks(
+        parsed.pages,
+        250,
+        50
       );
-    }
 
-    // IMPORTANT: keep these small (250/50). See note above chunkText().
-    const textChunks = chunkText(rawText, 250, 50);
-    if (textChunks.length === 0) {
-      return NextResponse.json(
-        { error: "No text content found in PDF" },
-        { status: 400 },
-      );
-    }
+    const numpages = pages[pages.length - 1].page_number;
 
     const encoder = new TextEncoder();
     const stream = new TransformStream();
     const writer = stream.writable.getWriter();
-
     const sendProgress = async (msg: object) => {
       await writer.write(encoder.encode(JSON.stringify(msg) + "\n"));
     };
-
     (async () => {
       try {
         await sendProgress({
           type: "start",
           total: textChunks.length,
-          scholarName,
+          scholarName
         });
-
         const chunks: Chunk[] = [];
-
         for (let i = 0; i < textChunks.length; i++) {
-          const text = textChunks[i];
-
+          const chunk = textChunks[i];
           await sendProgress({
             type: "progress",
             current: i + 1,
             total: textChunks.length,
-            message: `Embedding chunk ${i + 1} of ${textChunks.length}...`,
+            message: `Embedding chunk ${i + 1}`
           });
-
-          // "document" prefix required for nomic-embed-text's asymmetric
-          // embedding space — see "query" prefix used in the ask route.
-          const embedding = await getEmbedding(text, "document");
-
+          const embedding = await getEmbedding(chunk.embedText, "document");
           chunks.push({
             id: `chunk_${i}`,
-            text,
+            text: chunk.text,
+            heading: chunk.heading,
             embedding,
-            // NOTE: still a proportional estimate, not the chunk's real
-            // PDF page. Known limitation — switch to pdfjs-dist with
-            // position-aware extraction to get true page numbers.
-            page: Math.floor((i / textChunks.length) * pdfData.numpages) + 1,
+            page: chunk.page,
             scholarName,
+            embedText: chunk.embedText
           });
         }
-
         saveChunks(chunks, scholarName);
-
         await sendProgress({
           type: "done",
           totalChunks: chunks.length,
-          pages: pdfData.numpages,
-          scholarName,
+          pages: numpages,
+          scholarName
         });
-      } catch (err: unknown) {
+      } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
-        await sendProgress({ type: "error", message });
+        await sendProgress({
+          type: "error",
+          message
+        });
       } finally {
         await writer.close();
       }
     })();
-
     return new Response(stream.readable, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
-        Connection: "keep-alive",
+        "Connection": "keep-alive",
       },
     });
-  } catch (err: unknown) {
+  } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({
+      error: message
+    }, {
+      status: 500
+    });
   }
 }

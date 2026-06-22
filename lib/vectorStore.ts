@@ -1,5 +1,8 @@
 import fs from "fs";
 import path from "path";
+import { expandQuery } from "./synonyms";
+
+
 
 const DB_PATH = path.join(process.cwd(), "data", "chunks.json");
 
@@ -9,6 +12,8 @@ export interface Chunk {
   embedding: number[];
   page: number;
   scholarName: string;
+  heading: string;
+  embedText: string;
 }
 
 export interface DB {
@@ -17,7 +22,32 @@ export interface DB {
   uploadedAt: string;
 }
 
-function readDB(): DB {
+export function isMetadataChunk(text: string) {
+  const lower = text.toLowerCase();
+
+  const patterns = [
+    "table of contents",
+    "contents",
+    "chapter one",
+    "chapter two",
+    "chapter three",
+    "chapter four",
+    "chapter five",
+    "chapter six",
+  ];
+
+  const hasChapter = /chapter\s+(one|two|three|four|five|six|\d+)/i.test(text);
+
+  const hasManyPageNumbers =
+    (text.match(/\b\d+\b/g) || []).length > 5;
+
+  return (
+    patterns.some(p => lower.includes(p)) ||
+    (hasChapter && hasManyPageNumbers)
+  );
+}
+
+export function readDB(): DB {
   if (!fs.existsSync(DB_PATH)) {
     return { chunks: [], scholarName: "", uploadedAt: "" };
   }
@@ -28,6 +58,13 @@ function readDB(): DB {
 function writeDB(db: DB) {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+}
+
+export function normalizeText(text: string): string {
+  return text
+    .replace(/[^\x20-\x7E\n\r\t]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 export function saveChunks(chunks: Chunk[], scholarName: string) {
@@ -57,7 +94,7 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 }
 
 // Simple tokenization for BM25
-function tokenize(text: string) {
+export function tokenize(text: string) {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
@@ -126,6 +163,11 @@ export async function findRelevantChunks(
   if (db.chunks.length === 0) {
     return [];
   }
+  // const expandedQuestion = await expandQuery(question);
+  const expandedQuestion = question; // skip expandQuery entirely for now
+
+
+  console.log("question:", expandedQuestion);
 
   const idf = computeIdf(db.chunks.map((c) => c.text));
   const avgdl =
@@ -134,7 +176,7 @@ export async function findRelevantChunks(
 
   const raw = db.chunks.map((chunk) => {
     const cosine = cosineSimilarity(queryEmbedding, chunk.embedding);
-    const bm25 = bm25Score(question, chunk.text, idf, avgdl);
+    const bm25 = bm25Score(expandedQuestion, chunk.embedText, idf, avgdl);
     return { chunk, cosine, bm25 };
   });
 
@@ -151,16 +193,16 @@ export async function findRelevantChunks(
 
   const results: RelevanceHit[] = raw.map((r) => {
     const normCos = (r.cosine - cosStats.min) / cosStats.range;
-    const normBm25 = (r.bm25 - bm25Stats.min) / bm25Stats.range;
-    // Weight semantic similarity higher, but let keyword matches pull
+    const normBm25 =
+      r.bm25 > 0.1 ? (r.bm25 - bm25Stats.min) / bm25Stats.range : 0;    // Weight semantic similarity higher, but let keyword matches pull
     // exact names/dates/places up the ranking.
-    const combined = normCos * 0.65 + normBm25 * 0.35;
+    const combined = normCos * 0.70 + normBm25 * 0.30;
     return { chunk: r.chunk, cosine: r.cosine, bm25: r.bm25, combined };
   });
 
   results.sort((a, b) => b.combined - a.combined);
 
-  return results.slice(0, 10);
+  return results.slice(0, 20);
 }
 
 // Given a set of selected chunks, pull in their immediate neighbors
