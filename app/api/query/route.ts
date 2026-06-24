@@ -82,6 +82,7 @@ export async function POST(req: NextRequest) {
           chunk_id: c.id,
           page: c.page,
           evidence: c.embedText,
+          heading: c.heading,
         }));
 
         if (hits.length === 0) {
@@ -102,7 +103,7 @@ export async function POST(req: NextRequest) {
         await send({ type: "sources", sources });
 
         const evidenceText = hits
-          .map((h) => `(Page ${h.page}):\n${h.evidence}`)
+          .map((h, index) => `Chunk ${index + 1}: ${h.heading ? h.heading : ''} \n${h.evidence}`)
           .join("\n\n---\n\n");
 
 
@@ -116,18 +117,42 @@ export async function POST(req: NextRequest) {
         const start = Date.now();
 
         const prompt = `
-       [SYSTEM]
+[SYSTEM]
 You are a warm, knowledgeable research assistant specializing in Islamic biography. Your tone is respectful, clear, and conversational—like someone sharing a fascinating fact about a beloved scholar.
+The evidence chunks are from the biography of Maulana Ashraf Ali Thanvi (RA) (also called hadrat wala in the text).
 
 **CRITICAL RULES:**
+
 1. **Grounding:** Your answer MUST come strictly from the provided evidence chunks. Do NOT use outside knowledge.
-2. **Synthesis:** Read ALL 5 chunks. The answer may be in one chunk or scattered across multiple. The chunks are NOT ranked by importance—the best chunk might be at the bottom.
-3. **Natural Language:** Respond as if you're telling someone the answer in person. 
+
+2. **Evidence Selection - MOST IMPORTANT:**
+   - FIRST: Scan ALL chunks for the EXACT subject/topic the user is asking about.
+   - SECOND: Identify which chunk(s) contain that specific subject.
+   - THIRD: IGNORE chunks that don't contain the subject, even if they are longer, more detailed, or more dramatic.
+   - The correct chunk is the one that contains the SPECIFIC words or ideas from the question.
+
+3. **Synthesis:**
+   - Read ALL chunks carefully.
+   - The answer may be in one chunk or scattered across multiple.
+   - BUT: If one chunk clearly contains the answer and others don't, use ONLY that one.
+   - Do NOT combine information from unrelated chunks just because they are about similar topics
+
+4. **Prioritization:**
+   - A short chunk with the exact subject is MORE valuable than a long chunk with a related but different subject.
+
+5. **Natural Language:** Respond as if you're telling someone the answer in person.
    - ✅ *"Moulana named his first child Maryam..."*
    - ❌ *"Based on Chunk 2, Page 102, the evidence states..."*
-4. **Context, Not Citation:** You may briefly explain the *reason* behind the name if the evidence provides it (e.g., "He chose the name Maryam because..."), but do not cite chunk numbers, page numbers, or use phrases like "the relevant text states."
-5. **Flow:** If the answer is a simple fact, give a clear, direct sentence. If it's a story, narrate it naturally with a beginning, middle, and end.
-6. **Negative:** ONLY say "I couldn't find that information in the provided documents." if NONE of the chunks contain the answer, even after reading all of them carefully.
+
+6. **Context, Not Citation:** You may briefly explain the *reason* behind the answer if the evidence provides it, but do not cite chunk numbers, page numbers, or use phrases like "the relevant text states."
+
+7. **Flow:** If the answer is a simple fact, give a clear, direct sentence. If it's a story, narrate it naturally with a beginning, middle, and end.
+
+8. **Negative:** ONLY say "I couldn't find that information in the provided documents." if NONE of the chunks contain the answer, even after reading all of them carefully.
+
+9. **Interpretation:** The user's question may use different wording than the evidence. When answering, identify equivalent meanings and paraphrases.
+   - Examples: journey = travel, purchase = buy, scholar = teacher
+   - Do NOT require exact words from the question to appear in the evidence.
 
 ---
 
@@ -165,6 +190,13 @@ ${evidenceText}
         await send({ type: "done" });
 
         //const answer = await generate(prompt);
+        console.log(JSON.stringify({
+          question,
+          answer: fullAnswer,
+          contexts: JSON.stringify(evidenceText),
+          ground_truth: ""
+        }))
+
         console.log("LLM::::::::::", Date.now() - start);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Unknown error";

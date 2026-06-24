@@ -10,11 +10,9 @@ import {
   Chunk,
   extractEntities
 } from "@/lib/vectorStore";
-import llamaParseJson from "@/llamaParseJson.json";
 import { buildRAGChunksFromItems } from "@/lib/build-chunks-from-items";
 
 type ParsedPage = { page_number: number; text: string };
-type ParsedDocument = { text: { pages: ParsedPage[] } };
 interface RAGChunk {
   id: string;
   page: number;

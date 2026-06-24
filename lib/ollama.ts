@@ -8,12 +8,12 @@ export async function getEmbedding(
 ): Promise<number[]> {
   const prefix = type === "query" ? "search_query: " : "search_document: ";
 
-  const response = await fetch(`${OLLAMA_BASE}/api/embed`, {
+  const response = await fetch(`${OLLAMA_BASE}/api/embeddings`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: process.env.EMBED_MODEL || "nomic-embed-text",
-      input: normalizeText(text),
+      model: "nomic-embed-text",
+      prompt: normalizeText(text),
     }),
   });
   // process.env.EMBED_MODEL || "nomic-embed-text",
@@ -35,7 +35,7 @@ export async function getEmbedding(
   }
 
   const data = await response.json();
-  return data.embeddings[0];
+  return data.embedding;
 }
 
 export async function generateAnswer(
@@ -110,7 +110,7 @@ export async function generateAnswer(
       } catch {
         // fall through to deliver raw text
       }
-      onChunk(line);
+      continue;
     }
   }
 

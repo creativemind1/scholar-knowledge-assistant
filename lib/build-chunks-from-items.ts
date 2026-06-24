@@ -6,6 +6,7 @@ interface LlamaParseItem {
     value: string;
     level?: number;
     bbox?: any[];
+    items: LlamaParseItem[];
 }
 
 interface LlamaParsePage {
@@ -94,36 +95,98 @@ function processPageItems(page: LlamaParsePage): {
     let currentItemCount = 0;
     let hasContent = false;
 
+    // Helper function to remove HTML tags
+    function removeHtml(text: string): string {
+        if (!text) return '';
+        return text.replace(/<[^>]*>/g, '');
+    }
+
+    // Helper function to normalize diacritics
+    function normalizeDiacritics(text: string): string {
+        if (!text) return '';
+
+        // NFKD normalization decomposes characters (e.g., ā → a + ̄)
+        // Then remove the combining diacritical marks
+        let normalized = text.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+
+        // Additional manual mapping for common Arabic transliteration characters
+        const diacriticMap: { [key: string]: string } = {
+            'ā': 'a',
+            'ī': 'i',
+            'ū': 'u',
+            'ḥ': 'h',
+            'ṭ': 't',
+            'ṣ': 's',
+            'ḍ': 'd',
+            'ẓ': 'z',
+            'ʿ': "'",
+            'ʾ': "'",
+            '‘': "'",
+            '’': "'",
+            '“': '"',
+            '”': '"',
+        };
+
+        normalized = normalized.replace(/[āīūḥṭṣḍẓʿʾ‘’“”]/g, (match) => {
+            return diacriticMap[match] || match;
+        });
+
+        return normalized;
+    }
+
+    // Helper function to clean text (HTML + diacritics)
+    function cleanText(text: string): string {
+        if (!text) return '';
+        return normalizeDiacritics(removeHtml(text));
+    }
+
     for (const item of page.items) {
-        // ⭐ Skip footer items
+        // Skip footer items
         if (item.type === 'footer') continue;
 
-        // ⭐ If we find a heading, start a new section
+        // If we find a heading, start a new section
         if (item.type === 'heading') {
             // Save previous section if it has content
             if (hasContent && currentText.trim()) {
                 sections.push({
-                    heading: currentHeading || 'Untitled Section',
+                    heading: cleanText(currentHeading) || 'Untitled Section',
                     headingLevel: currentLevel,
-                    text: currentText.trim(),
+                    text: cleanText(currentText.trim()),
                     itemCount: currentItemCount
                 });
             }
 
-            // ⭐ Start new section with this heading
+            // Start new section with this heading
             currentHeading = item.value || item.md || '';
             currentLevel = item.level || 0;
             currentText = '';
             currentItemCount = 0;
             hasContent = false;
 
-            // ⭐ Debug: Log heading found
+            // Debug: Log heading found
             if (currentHeading.includes('I’TIKAAF') || currentHeading.includes('SPRING') || currentHeading.includes('HAZRAT')) {
-                console.log(`🔍 Found heading on page ${page.page_number}: "${currentHeading}"`);
+                console.log(`🔍 Found heading on page ${page.page_number}: "${cleanText(currentHeading)}"`);
             }
-        } else {
-            // ⭐ Add text to current section
-            const textContent = item.value || item.md || '';
+        }
+        // ⭐ Everything else (text, list, list_item, etc.) gets added to current section
+        else {
+            let textContent = '';
+
+            // Handle list items
+            if (item.type === 'list') {
+                // Get all list items as a string
+                if (item.items && Array.isArray(item.items)) {
+                    textContent = item.items.map(i => cleanText(i.value || i.md || '')).join(' ');
+                } else {
+                    textContent = cleanText(item.value || item.md || '');
+                }
+            }
+
+            // Regular text
+            else {
+                textContent = cleanText(item.value || item.md || '');
+            }
+
             if (textContent.trim()) {
                 currentText += (currentText ? ' ' : '') + textContent;
                 currentItemCount++;
@@ -132,21 +195,26 @@ function processPageItems(page: LlamaParsePage): {
         }
     }
 
-    // ⭐ Don't forget the last section
+    // Don't forget the last section
     if (hasContent && currentText.trim()) {
         sections.push({
-            heading: currentHeading || 'Untitled Section',
+            heading: cleanText(currentHeading) || 'Untitled Section',
             headingLevel: currentLevel,
-            text: currentText.trim(),
+            text: cleanText(currentText.trim()),
             itemCount: currentItemCount
         });
     }
 
-    // ⭐ If no sections were created (no headings), create one chunk for the whole page
+    // If no sections were created, create one chunk for the whole page
     if (sections.length === 0) {
         const allText = page.items
             .filter(item => item.type !== 'footer')
-            .map(item => item.value || item.md || '')
+            .map(item => {
+                if (item.type === 'list' && item.items) {
+                    return item.items.map(i => cleanText(i.value || i.md || '')).join(' ');
+                }
+                return cleanText(item.value || item.md || '');
+            })
             .join(' ')
             .trim();
 
@@ -154,7 +222,7 @@ function processPageItems(page: LlamaParsePage): {
             sections.push({
                 heading: 'Untitled Section',
                 headingLevel: 0,
-                text: allText,
+                text: cleanText(allText),
                 itemCount: page.items.length
             });
         }
