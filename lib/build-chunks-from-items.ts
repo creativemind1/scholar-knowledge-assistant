@@ -49,9 +49,12 @@ export function buildRAGChunksFromItems(pages: LlamaParsePage[]): RAGChunk[] {
 
         // ⭐ Add to overall chunks
         for (const chunk of pageChunks) {
-            const cleanText = chunk.text.trim();
-            if (!cleanText) continue;
 
+            const cleanText = chunk.text.replace(/'\-/g, '').trim();
+            if (!cleanText) continue;
+            if (page.page_number === 632) {
+                console.log(chunk, '======chunk======');
+            }
             chunks.push({
                 id: `chunk_${chunkCounter++}`,
                 page: page.page_number,

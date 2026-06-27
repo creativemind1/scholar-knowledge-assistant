@@ -1,3 +1,5 @@
+import { max } from "@xenova/transformers";
+import { expandQueryPrompt } from "./prompts/prompts";
 import { normalizeText } from "./vectorStore";
 
 const OLLAMA_BASE = process.env.OLLAMA_URL || "http://localhost:11434";
@@ -214,4 +216,30 @@ If not found:
   } catch {
     throw new Error("Could not parse evidence extractor response");
   }
+}
+
+
+export async function expandQuery(question: string): Promise<string> {
+  const prompt = expandQueryPrompt(question);
+  const res = await fetch(`${OLLAMA_BASE}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: process.env.CHAT_MODEL || "mistral",
+      prompt,
+      stream: false,
+      options: {
+        temperature: 0.3,
+        num_predict: 100,
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Ollama generate error: ${err}`);
+  }
+
+  const data = await res.json();
+  return data.response;
 }

@@ -21,18 +21,3 @@ async function getWord(word: string): Promise<string[]> {
         return [];
     }
 }
-
-export async function expandQuery(question: string): Promise<string> {
-
-    const words = question.toLowerCase().split(/\s+/);
-
-    // Only look up "main words" — skip stopwords and very short words
-    const mainWords = words
-        .map((w) => w.replace(/[^\w]/g, ""))
-        .filter((w) => w.length > 2 && !STOPWORDS.has(w));
-
-    const results = await Promise.all(mainWords.map((w) => getWord(w)));
-    const extra = [...new Set(results.flat())];
-
-    return extra.length > 0 ? `${question} ${extra.join(" ")}` : question;
-}

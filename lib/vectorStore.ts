@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { expandQuery } from "./synonyms";
+import { expandQuery } from "./ollama";
 
 
 
@@ -101,13 +101,32 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// Simple tokenization for BM25
-export function tokenize(text: string) {
+const STOPWORDS = new Set([
+  // Common English
+  'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+  'of', 'with', 'by', 'from', 'is', 'was', 'are', 'were', 'be', 'been',
+  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+  'should', 'may', 'might', 'shall', 'can', 'this', 'that', 'these',
+  'those', 'it', 'its', 'also', 'just', 'more', 'some', 'such', 'said',
+  'says', 'who', 'what', 'where', 'when', 'how', 'why', 'which', 'about',
+  'their', 'they', 'them', 'then', 'than', 'there', 'here', 'each',
+  'all', 'any', 'both', 'few', 'not', 'only', 'own', 'same', 'so',
+  'very', 'as', 'if', 'his', 'her', 'him', 'our', 'your', 'my', 'we',
+  'he', 'she', 'you', 'me', 'us', 'i',
+  // Generic words causing false BM25 matches in your RAG
+  'rules', 'book', 'law', 'laws', 'contains', 'contain', 'tell',
+  'describe', 'explain', 'mention', 'according', 'based', 'related',
+  'information', 'regarding', 'about', 'following', 'said', 'says',
+  'one', 'two', 'three', 'like', 'see', 'now', 'get', 'go', 'come',
+  'know', 'think', 'make', 'take', 'give', 'use', 'find', 'want'
+])
+
+export function tokenize(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
     .split(/\s+/)
-    .filter(Boolean);
+    .filter(t => t.length > 2 && !STOPWORDS.has(t))
 }
 
 // Compute idf map across docs
@@ -171,20 +190,15 @@ export async function findRelevantChunks(
   if (db.chunks.length === 0) {
     return [];
   }
-  // const expandedQuestion = await expandQuery(question);
-  const expandedQuestion = question; // skip expandQuery entirely for now
 
-
-  console.log("question:", expandedQuestion);
-
-  const idf = computeIdf(db.chunks.map((c) => c.text));
+  const idf = computeIdf(db.chunks.map((c) => c.embedText));
   const avgdl =
-    db.chunks.reduce((sum, c) => sum + tokenize(c.text).length, 0) /
+    db.chunks.reduce((sum, c) => sum + tokenize(c.embedText).length, 0) /
     db.chunks.length;
 
   const raw = db.chunks.map((chunk) => {
     const cosine = cosineSimilarity(queryEmbedding, chunk.embedding);
-    const bm25 = bm25Score(expandedQuestion, chunk.embedText, idf, avgdl);
+    const bm25 = bm25Score(question, chunk.embedText, idf, avgdl);
     return { chunk, cosine, bm25 };
   });
 
@@ -204,7 +218,8 @@ export async function findRelevantChunks(
     const normBm25 =
       r.bm25 > 0.1 ? (r.bm25 - bm25Stats.min) / bm25Stats.range : 0;    // Weight semantic similarity higher, but let keyword matches pull
     // exact names/dates/places up the ranking.
-    const combined = normCos * 0.70 + normBm25 * 0.30;
+    const combined = normCos * 0.75 + normBm25 * 0.25 // was 0.70/0.30
+    //const combined = r.cosine;
     return { chunk: r.chunk, cosine: r.cosine, bm25: r.bm25, combined };
   });
 
@@ -251,4 +266,56 @@ export function extractEntities(text: string): string[] {
   // Look for capitalized words that might be names or places
   const entities = text.match(/[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*/g) || [];
   return [...new Set(entities)].slice(0, 10);
+}
+
+export function expandChunks(
+  topChunks: Chunk[],
+  allChunks: Chunk[],
+  windowSize: number = 5,  // Increased default
+  maxChunks: number = 30
+): Chunk[] {
+  const expanded: Chunk[] = [];
+  const seen = new Set<string>();
+
+  for (const chunk of topChunks) {
+    const index = allChunks.findIndex(c => c.id === chunk.id);
+
+    if (index === -1) continue;
+
+    // Get chunks BEFORE with window size
+    for (let i = 1; i <= windowSize; i++) {
+      const prevIndex = index - i;
+      if (prevIndex >= 0) {
+        const prev = allChunks[prevIndex];
+        if (!seen.has(prev.id)) {
+          expanded.push(prev);
+          seen.add(prev.id);
+        }
+      }
+    }
+
+    // Current chunk
+    if (!seen.has(chunk.id)) {
+      expanded.push(chunk);
+      seen.add(chunk.id);
+    }
+
+    // Get chunks AFTER with window size
+    for (let i = 1; i <= windowSize; i++) {
+      const nextIndex = index + i;
+      if (nextIndex < allChunks.length) {
+        const next = allChunks[nextIndex];
+        if (!seen.has(next.id)) {
+          expanded.push(next);
+          seen.add(next.id);
+        }
+      }
+    }
+  }
+
+  // Sort by page number
+  const sorted = expanded.sort((a, b) => a.page - b.page);
+
+  // Limit to maxChunks
+  return sorted.slice(0, maxChunks);
 }

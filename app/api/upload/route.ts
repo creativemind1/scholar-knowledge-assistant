@@ -163,8 +163,6 @@ function buildRAGChunks(pages: ParsedPage[]): RAGChunk[] {
   return chunks;
 }
 
-
-
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
